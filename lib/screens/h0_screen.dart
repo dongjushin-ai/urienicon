@@ -16,31 +16,47 @@ class H0Screen extends StatefulWidget {
   State<H0Screen> createState() => _H0ScreenState();
 }
 
+/// 한 장 결과. 메모리를 아끼려고 RGBA 원본은 버리고 숫자와 PNG(썸네일용)만 둔다.
 class _Row {
-  _Row(this.index, this.width, this.height, this.result)
-    : verdict = result.ok ? null : false;
-  final int index;
-  final int width, height;
-  final SegmentResult result;
+  _Row(this.index, SegmentResult r)
+    : width = r.width,
+      height = r.height,
+      mlkitMs = r.mlkitMs,
+      decodeMs = r.decodeMs,
+      cold = r.cold,
+      inferred = r.inferred,
+      ratio = r.foregroundRatio,
+      failure = r.failure,
+      png = r.cutoutPng,
+      verdict = r.ok ? null : false;
+  final int index, width, height, mlkitMs, decodeMs;
+  final bool cold, inferred;
+  final double ratio;
+  final SegmentFailure? failure;
+  final Uint8List? png;
 
   /// true=OK, false=NG, null=미판정. 분할 실패는 기본 NG.
   bool? verdict;
-  Uint8List? get thumb => result.cutoutPng;
+  int get totalMs => mlkitMs + decodeMs;
 }
 
 class _H0ScreenState extends State<H0Screen> {
-  final _segmenter = PetSegmenter();
   final _picker = ImagePicker();
   final _device = TextEditingController();
   final _rows = <_Row>[];
   int _done = 0, _total = 0;
   bool _busy = false;
+  String? _notice;
 
   @override
   void dispose() {
-    _segmenter.close();
     _device.dispose();
     super.dispose();
+  }
+
+  void _snack(String text) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
   Future<void> _run() async {
@@ -52,28 +68,47 @@ class _H0ScreenState extends State<H0Screen> {
         limit: 30,
         requestFullMetadata: false,
       );
-    } on Exception catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('사진을 열지 못했어요: $e')));
-      }
+    } catch (e) {
+      debugPrint('사진 선택 실패: $e');
+      _snack('사진을 열지 못했어요. 다시 시도해 주세요.');
       return;
     }
-    if (files.isEmpty) return;
+    if (files.isEmpty) {
+      _snack('사진을 고르지 않았어요.');
+      return;
+    }
+    if (!mounted) return;
     setState(() {
       _busy = true;
       _rows.clear();
       _done = 0;
       _total = files.length;
+      _notice = null;
     });
+    // 첫 추론 지연은 따로 재고, 사진들은 모두 데워진 상태에서 잰다.
+    await petSegmenter.warmUp();
     // 한 장씩 순서대로(동시 실행은 시간이 섞이고 메모리가 튄다).
     for (final f in files) {
-      final r = await _segmenter.segment(f.path);
-      final w = r.cutout?.width ?? 0, h = r.cutout?.height ?? 0;
+      SegmentResult r;
+      try {
+        r = await petSegmenter.segment(f.path);
+      } catch (e) {
+        debugPrint('측정 중 오류: $e');
+        r = SegmentResult(
+          mlkitMs: 0,
+          cold: false,
+          failure: SegmentFailure.error,
+        );
+      } finally {
+        await deletePickedCopy(f.path);
+      }
       if (!mounted) return;
       setState(() {
-        _rows.add(_Row(_rows.length + 1, w, h, r));
+        _rows.add(_Row(_rows.length + 1, r));
         _done++;
+        if (r.failure == SegmentFailure.modelNotReady) {
+          _notice = SegmentFailure.modelNotReady.message;
+        }
       });
     }
     if (mounted) setState(() => _busy = false);
@@ -81,8 +116,13 @@ class _H0ScreenState extends State<H0Screen> {
 
   H0Stats get _stats => H0Stats.from([
     for (final r in _rows)
-      H0Sample(ms: r.result.totalMs, cold: r.result.cold, verdict: r.verdict),
-  ]);
+      H0Sample(
+        ms: r.totalMs,
+        cold: r.cold,
+        inferred: r.inferred,
+        verdict: r.verdict,
+      ),
+  ], coldMs: petSegmenter.warmUpMs);
 
   String _csv() {
     final device = _device.text.trim().replaceAll(',', ' ');
@@ -90,19 +130,18 @@ class _H0ScreenState extends State<H0Screen> {
       'device,index,width,height,mlkit_ms,decode_ms,total_ms,cold,fg_ratio,failure,verdict\n',
     );
     for (final r in _rows) {
-      final x = r.result;
       b.writeln(
         [
           device,
           r.index,
           r.width,
           r.height,
-          x.mlkitMs,
-          x.decodeMs,
-          x.totalMs,
-          x.cold,
-          x.foregroundRatio.toStringAsFixed(3),
-          x.failure?.name ?? '',
+          r.mlkitMs,
+          r.decodeMs,
+          r.totalMs,
+          r.cold,
+          r.ratio.toStringAsFixed(3),
+          r.failure?.name ?? '',
           switch (r.verdict) {
             true => 'OK',
             false => 'NG',
@@ -118,12 +157,7 @@ class _H0ScreenState extends State<H0Screen> {
     final s = _stats;
     final text = '${_csv()}\n# ${s.summaryLine(_device.text.trim())}\n';
     await Clipboard.setData(ClipboardData(text: text));
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('CSV와 요약을 복사했어요. docs/h0-measure.md에 붙여 주세요.'),
-      ),
-    );
+    _snack('CSV와 요약을 복사했어요. docs/h0-measure.md에 붙여 주세요.');
   }
 
   @override
@@ -159,8 +193,16 @@ class _H0ScreenState extends State<H0Screen> {
           if (_busy) ...[
             const SizedBox(height: 12),
             LinearProgressIndicator(value: _total == 0 ? null : _done / _total),
-            Text('$_done / $_total'),
+            Semantics(liveRegion: true, child: Text('$_done / $_total')),
           ],
+          if (_notice != null)
+            Semantics(
+              liveRegion: true,
+              child: Text(
+                _notice!,
+                style: const TextStyle(color: Riso.pinkText),
+              ),
+            ),
           if (_rows.isNotEmpty) ...[
             const SizedBox(height: 16),
             _Summary(stats: s),
@@ -196,7 +238,7 @@ class _Summary extends StatelessWidget {
             width: 40,
             child: Text(
               pass == null ? '' : (pass ? '통과' : '미달'),
-              style: TextStyle(color: pass == true ? Riso.blue : Riso.pink),
+              style: TextStyle(color: pass == true ? Riso.blue : Riso.pinkText),
             ),
           ),
         ],
@@ -214,12 +256,12 @@ class _Summary extends StatelessWidget {
               s.qualityPass,
             ),
             line(
-              '분할 중앙값 (첫 추론 제외)',
+              '분할 중앙값',
               s.medianMs == null ? '-' : '${s.medianMs} ms',
               s.speedPass,
             ),
             line('분할 p90', s.p90Ms == null ? '-' : '${s.p90Ms} ms', null),
-            line('첫 추론', s.coldMs == null ? '-' : '${s.coldMs} ms', null),
+            line('첫 추론(워밍업)', s.coldMs == null ? '-' : '${s.coldMs} ms', null),
             const Divider(),
             line('H0 판정', s.verdictLabel, s.h0Pass),
           ],
@@ -236,8 +278,7 @@ class _RowTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final r = row.result;
-    final thumb = row.thumb;
+    final png = row.png;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
@@ -246,32 +287,39 @@ class _RowTile extends StatelessWidget {
             dimension: 72,
             child: ColoredBox(
               color: const Color(0xFF26262E),
-              child: thumb == null
-                  ? const Icon(Icons.block, color: Colors.white54)
+              child: png == null
+                  ? Icon(
+                      Icons.block,
+                      color: Colors.white70,
+                      semanticLabel: '${row.index}번 오리기 실패',
+                    )
                   : Semantics(
                       label: '${row.index}번 오린 결과',
                       image: true,
-                      child: Image.memory(thumb, cacheWidth: 144),
+                      child: Image.memory(png, cacheWidth: 144),
                     ),
             ),
           ),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              '#${row.index}  ${r.totalMs}ms${r.cold ? ' (첫)' : ''}\n'
-              '전경 ${(r.foregroundRatio * 100).toStringAsFixed(0)}%'
-              '${r.failure == null ? '' : ' · ${r.failure!.name}'}',
+              '#${row.index}  ${row.totalMs}ms\n'
+              '전경 ${(row.ratio * 100).toStringAsFixed(0)}%'
+              '${row.failure == null ? '' : ' · ${row.failure!.name}'}',
             ),
           ),
-          SegmentedButton<bool>(
-            segments: const [
-              ButtonSegment(value: true, label: Text('OK')),
-              ButtonSegment(value: false, label: Text('NG')),
-            ],
-            selected: {?row.verdict},
-            emptySelectionAllowed: true,
-            showSelectedIcon: false,
-            onSelectionChanged: (v) => onVerdict(v.isEmpty ? null : v.first),
+          Semantics(
+            label: '${row.index}번 판정',
+            child: SegmentedButton<bool>(
+              segments: const [
+                ButtonSegment(value: true, label: Text('OK')),
+                ButtonSegment(value: false, label: Text('NG')),
+              ],
+              selected: {?row.verdict},
+              emptySelectionAllowed: true,
+              showSelectedIcon: false,
+              onSelectionChanged: (v) => onVerdict(v.isEmpty ? null : v.first),
+            ),
           ),
         ],
       ),

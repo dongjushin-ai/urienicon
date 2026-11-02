@@ -4,12 +4,15 @@ import 'package:image_picker_platform_interface/image_picker_platform_interface.
 
 import 'screens/h0_screen.dart';
 import 'screens/spike_screen.dart';
+import 'segmenter.dart';
 
 void main() {
   // Android 15 이하도 시스템 Photo Picker 사용(사진 권한 0개). 16+는 항상 Photo Picker.
   final picker = ImagePickerPlatform.instance;
   if (picker is ImagePickerAndroid) picker.useAndroidPhotoPicker = true;
   runApp(const UrieniconApp());
+  // 설계 A2: 앱 시작 때 더미 추론으로 첫 추론 지연을 미리 치른다(결과는 기다리지 않음).
+  petSegmenter.warmUp();
 }
 
 /// docs/style.md 팔레트.
@@ -18,6 +21,9 @@ abstract final class Riso {
   static const pink = Color(0xFFFF4FA3);
   static const blue = Color(0xFF2F4FB8);
   static const yellow = Color(0xFFFFD400);
+
+  /// 종이색 위 글자용 진한 핑크(대비 5.8:1, WCAG AA). 형광 핑크는 글자로 쓰면 2.6:1.
+  static const pinkText = Color(0xFFB0125F);
 }
 
 class UrieniconApp extends StatelessWidget {

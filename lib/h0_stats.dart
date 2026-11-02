@@ -2,9 +2,17 @@
 ///
 /// 기준(docs/design.md H0): 사진 중 수정 없이 OK ≥ 80%, 중급기 1장 ≤ 1.5초.
 class H0Sample {
-  const H0Sample({required this.ms, required this.cold, this.verdict});
+  const H0Sample({
+    required this.ms,
+    required this.cold,
+    this.inferred = true,
+    this.verdict,
+  });
   final int ms;
   final bool cold;
+
+  /// 추론까지 끝났는가. 모델 미설치·오류는 시간이 짧게 찍혀 속도 통계를 왜곡하므로 뺀다.
+  final bool inferred;
   final bool? verdict;
 }
 
@@ -18,13 +26,14 @@ class H0Stats {
     required this.coldMs,
   });
 
-  factory H0Stats.from(List<H0Sample> samples) {
+  /// [coldMs]: 워밍업(첫 추론) 시간. 없으면 표본 중 첫 추론을 쓴다.
+  factory H0Stats.from(List<H0Sample> samples, {int? coldMs}) {
     // 첫 추론은 모델 적재 시간이 섞이므로 속도 판정에서 뺀다.
     final warm = [
       for (final s in samples)
-        if (!s.cold) s.ms,
+        if (s.inferred && !s.cold) s.ms,
     ]..sort();
-    final cold = samples.where((s) => s.cold).map((s) => s.ms);
+    final coldSample = samples.where((s) => s.inferred && s.cold);
     final judged = samples.where((s) => s.verdict != null).length;
     final ok = samples.where((s) => s.verdict == true).length;
     return H0Stats._(
@@ -33,7 +42,7 @@ class H0Stats {
       okCount: ok,
       medianMs: _percentile(warm, 0.5),
       p90Ms: _percentile(warm, 0.9),
-      coldMs: cold.isEmpty ? null : cold.first,
+      coldMs: coldMs ?? (coldSample.isEmpty ? null : coldSample.first.ms),
     );
   }
 

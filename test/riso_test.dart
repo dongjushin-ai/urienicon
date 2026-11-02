@@ -117,9 +117,15 @@ void main() {
     final px = out.transparent.pixels;
     int alphaAt(int x) => px[(y * 512 + x) * 4 + 3];
     int redAt(int x) => px[(y * 512 + x) * 4];
-    expect(alphaAt(edgeX - 8), 255); // 테두리 안(블루 어긋남은 오른쪽이라 왼쪽은 흰 종이)
-    expect(redAt(edgeX - 8), greaterThan(235));
-    expect(alphaAt(edgeX - 20), 0); // 11 + 2 + 1.5 바깥
+    // 왼쪽은 블루 어긋남(+6,+5) 반대편이라 순수 흰 종이.
+    expect(alphaAt(edgeX - 10), 255); // 테두리 11px 안
+    expect(redAt(edgeX - 10), greaterThan(235));
+    expect(alphaAt(edgeX - 12), 0); // 테두리와 재단선 사이 2px 틈
+    expect(
+      alphaAt(edgeX - 14),
+      greaterThan(0),
+    ); // 재단선(점선이라 일부는 0일 수 있어 아래 테스트에서 확인)
+    expect(alphaAt(edgeX - 20), 0); // 재단선 바깥
   });
 
   test('잉크 빠짐은 잉크 면적의 3~6%(설계 4%)', () {
@@ -137,6 +143,60 @@ void main() {
     expect(ratio, inInclusiveRange(0.03, 0.06), reason: '실제 $ratio');
   });
 
+  test('재단선은 꼬리처럼 뻗은 곳에서도 점선(5 on / 3 off)', () {
+    // 원판 + 오른쪽으로 길게 뻗은 꼬리(가로 막대).
+    final im = disk(600, 300, cx: 150, cy: 150, r: 110, shade: 150);
+    for (var y = 135; y < 165; y++) {
+      for (var x = 150; x < 590; x++) {
+        final o = (y * 600 + x) * 4;
+        im.pixels
+          ..[o] = 150
+          ..[o + 1] = 150
+          ..[o + 2] = 150
+          ..[o + 3] = 255;
+      }
+    }
+    final out = renderRiso(im, const RisoParams(dropout: 0));
+    final m = out.plates.mask;
+    // 꼬리 가운데 x에서 꼬리 윗변 찾기
+    const x0 = 380;
+    var top = 0;
+    while (m[top * 512 + x0] < 0.5) {
+      top++;
+    }
+    final y = top - 14; // 재단선 중심(테두리 11 + 틈 2 + 0.75)
+    final px = out.transparent.pixels;
+    var run = 0, maxRun = 0, flips = 0;
+    var prev = false;
+    for (var x = 330; x < 430; x++) {
+      final on = px[(y * 512 + x) * 4 + 3] > 64;
+      if (on) {
+        run++;
+        maxRun = math.max(maxRun, run);
+      } else {
+        run = 0;
+      }
+      if (on != prev) flips++;
+      prev = on;
+    }
+    expect(maxRun, lessThanOrEqualTo(7), reason: '실선 구간 $maxRun px');
+    expect(flips, greaterThanOrEqualTo(20), reason: '점선 전환 $flips회');
+  });
+
+  test('잉크 빠짐은 블루 판에도 적용', () {
+    final src = disk(400, 400);
+    final full = renderRiso(src, const RisoParams(dropout: 0, seed: 9));
+    final drop = renderRiso(src, const RisoParams(seed: 9));
+    var inked = 0, lost = 0;
+    for (var i = 0; i < full.plates.blue.length; i++) {
+      if (full.plates.blue[i] > 0.3) {
+        inked++;
+        if (drop.plates.blue[i] < full.plates.blue[i] * 0.5) lost++;
+      }
+    }
+    expect(lost / inked, inInclusiveRange(0.02, 0.08));
+  });
+
   test('작은 잡티는 지우고 배치에 영향을 주지 않음', () {
     final clean = renderRiso(disk(400, 400, cx: 200, cy: 200, r: 120));
     final noisy = renderRiso(
@@ -152,32 +212,43 @@ void main() {
     expect(noisy.transparent.pixels, clean.transparent.pixels);
   });
 
-  test('골든: 합성 이미지 변환 결과가 기준과 같다', () {
+  test('골든: 합성 이미지 변환 결과(종이·투명)가 기준과 같다', () {
     final out = renderRiso(disk(320, 360, cx: 160, cy: 190, r: 140));
-    final file = File('test/goldens/riso_disk.png');
-    final actual = img.Image.fromBytes(
-      width: 512,
-      height: 512,
-      bytes: out.paper.pixels.buffer,
-      numChannels: 4,
-      order: img.ChannelOrder.rgba,
-    );
-    if (Platform.environment['UPDATE_GOLDENS'] == '1') {
-      file
-        ..createSync(recursive: true)
-        ..writeAsBytesSync(img.encodePng(actual));
-      markTestSkipped('골든 갱신: ${file.path}');
-      return;
+    final update = Platform.environment['UPDATE_GOLDENS'] == '1';
+    for (final (name, im) in [
+      ('riso_disk.png', out.paper),
+      ('riso_disk_transparent.png', out.transparent),
+    ]) {
+      final file = File('test/goldens/$name');
+      if (update) {
+        final png = img.Image.fromBytes(
+          width: 512,
+          height: 512,
+          bytes: im.pixels.buffer,
+          numChannels: 4,
+          order: img.ChannelOrder.rgba,
+        );
+        file
+          ..createSync(recursive: true)
+          ..writeAsBytesSync(img.encodePng(png));
+        continue;
+      }
+      expect(
+        file.existsSync(),
+        isTrue,
+        reason: 'UPDATE_GOLDENS=1 로 골든을 먼저 만드세요',
+      );
+      final g = img
+          .decodePng(file.readAsBytesSync())!
+          .getBytes(order: img.ChannelOrder.rgba);
+      final a = im.pixels;
+      var diff = 0;
+      for (var i = 0; i < a.length; i++) {
+        if ((a[i] - g[i]).abs() > 2) diff++;
+      }
+      // 플랫폼 간 부동소수 차이 허용: 채널의 0.1% 이하
+      expect(diff / a.length, lessThan(0.001), reason: '$name 다른 채널 $diff개');
     }
-    expect(file.existsSync(), isTrue, reason: 'UPDATE_GOLDENS=1 로 골든을 먼저 만드세요');
-    final golden = img.decodePng(file.readAsBytesSync())!;
-    final g = golden.getBytes(order: img.ChannelOrder.rgba);
-    final a = out.paper.pixels;
-    var diff = 0;
-    for (var i = 0; i < a.length; i++) {
-      if ((a[i] - g[i]).abs() > 2) diff++;
-    }
-    // 플랫폼 간 부동소수 차이 허용: 채널의 0.1% 이하
-    expect(diff / a.length, lessThan(0.001), reason: '다른 채널 $diff개');
+    if (update) markTestSkipped('골든 갱신');
   });
 }

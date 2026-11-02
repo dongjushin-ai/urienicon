@@ -15,7 +15,11 @@ Future<RgbaImage> decodeToRgba(Uint8List encoded) async {
         format: ui.ImageByteFormat.rawStraightRgba,
       );
       if (data == null) throw StateError('픽셀을 읽지 못함');
-      return RgbaImage(image.width, image.height, data.buffer.asUint8List());
+      return RgbaImage(
+        image.width,
+        image.height,
+        data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
+      );
     } finally {
       image.dispose();
     }
@@ -29,9 +33,11 @@ Future<ui.Size> readImageSize(Uint8List encoded) async {
   final buffer = await ui.ImmutableBuffer.fromUint8List(encoded);
   try {
     final desc = await ui.ImageDescriptor.encoded(buffer);
-    final size = ui.Size(desc.width.toDouble(), desc.height.toDouble());
-    desc.dispose();
-    return size;
+    try {
+      return ui.Size(desc.width.toDouble(), desc.height.toDouble());
+    } finally {
+      desc.dispose();
+    }
   } finally {
     buffer.dispose();
   }
@@ -61,7 +67,7 @@ Future<Uint8List> encodePng(RgbaImage im) async {
   try {
     final png = await image.toByteData(format: ui.ImageByteFormat.png);
     if (png == null) throw StateError('PNG 인코딩 실패');
-    return png.buffer.asUint8List();
+    return png.buffer.asUint8List(png.offsetInBytes, png.lengthInBytes);
   } finally {
     image.dispose();
   }

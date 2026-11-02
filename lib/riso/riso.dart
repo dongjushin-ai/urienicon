@@ -34,13 +34,15 @@ class RisoParams {
     this.offsetX = 6,
     this.offsetY = 5,
     this.border = 11,
-    this.contour = 4,
+    this.contour = 5,
     this.edgeLow = 0.10,
     this.edgeHigh = 0.28,
     this.shadowLevel = 0.22,
     this.dropout = 0.04,
     this.grain = 0.35,
     this.seed = 1,
+    this.pinkColor = kPink,
+    this.blueColor = kBlue,
   });
 
   /// 출력 한 변(px).
@@ -79,6 +81,10 @@ class RisoParams {
   /// 같은 시드면 같은 결과.
   final int seed;
 
+  /// 판 잉크 색(0xRRGGBB). 기본은 style.md 확정 팔레트.
+  final int pinkColor;
+  final int blueColor;
+
   RisoParams copyWith({
     double? cell,
     int? offsetX,
@@ -102,6 +108,8 @@ class RisoParams {
     dropout: dropout ?? this.dropout,
     grain: grain ?? this.grain,
     seed: seed ?? this.seed,
+    pinkColor: pinkColor,
+    blueColor: blueColor,
   );
 
   /// 테두리·어긋남·재단선이 캔버스 밖으로 나가지 않게 두는 여백.
@@ -238,45 +246,44 @@ RisoOutput renderRiso(RgbaImage cutout, [RisoParams p = const RisoParams()]) {
   }
 
   // 8. 스티커 종이(흰 테두리) + 점선 재단선.
+  // 점선은 재단선 중심선을 따라 잰 호 길이로 5 on / 3 off. 꼬리·귀 같은 돌출부도 일정.
+  final cutLevel = p.border + 2.75;
+  final arc = _arcAlongLevel(distOut, s, cutLevel, 2);
   final sticker = Float32List(n);
   final cut = Float32List(n);
-  final cx = ox + dw / 2, cy = oy + dh / 2;
-  for (var y = 0; y < s; y++) {
-    for (var x = 0; x < s; x++) {
-      final i = y * s + x;
-      final d = distOut[i];
-      sticker[i] = math.max(mask[i], _clamp01(p.border - d + 0.5));
-      // 재단선: 테두리 바깥 2px 띄우고 1.5px 두께, 호 길이 기준 5 on / 3 off.
-      final t = d - (p.border + 2);
-      if (t > -1 && t < 2.5) {
-        final w = _clamp01(t + 1) * _clamp01(2.5 - t);
-        final ax = x + 0.5 - cx, ay = y + 0.5 - cy;
-        final arc = math.atan2(ay, ax) * math.sqrt(ax * ax + ay * ay);
-        final ph = arc - (arc / 8).floorToDouble() * 8;
-        cut[i] = ph < 5 ? w : 0;
-      }
+  for (var i = 0; i < n; i++) {
+    final d = distOut[i];
+    sticker[i] = math.max(mask[i], _clamp01(p.border - d + 0.5));
+    final t = d - (p.border + 2);
+    if (t > -1 && t < 2.5) {
+      final w = _clamp01(t + 1) * _clamp01(2.5 - t);
+      final a = arc[i];
+      cut[i] = a < 0 || a - (a / 8).floorToDouble() * 8 < 5 ? w : 0;
     }
   }
 
   // 9. 합성: 흰 종이 × 핑크 × 블루(곱하기), 그레인.
   final tr = RgbaImage.blank(s, s);
   final pa = RgbaImage.blank(s, s);
-  final pr = _ch(kPink, 16), pg = _ch(kPink, 8), pb = _ch(kPink, 0);
-  final br = _ch(kBlue, 16), bg = _ch(kBlue, 8), bb = _ch(kBlue, 0);
+  final pc = p.pinkColor, bc = p.blueColor;
+  final pr = _ch(pc, 16), pg = _ch(pc, 8), pb = _ch(pc, 0);
+  final br = _ch(bc, 16), bg = _ch(bc, 8), bb = _ch(bc, 0);
   final qr = _ch(kPaper, 16), qg = _ch(kPaper, 8), qb = _ch(kPaper, 0);
   final grainAmp = p.grain * 0.16;
   for (var i = 0; i < n; i++) {
     final a = sticker[i];
     final x = i % s, y = i ~/ s;
     final g = 1 + grainAmp * (rnd.unit(x, y, 37) - 0.5);
-    final pk = pink[i] * a, bl = blue[i] * a;
+    // 출력은 스트레이트 알파라 잉크에 알파를 다시 곱하지 않는다.
+    final pk = a > 0 ? math.min(1.0, pink[i] / a) : 0.0;
+    final bl = a > 0 ? math.min(1.0, blue[i] / a) : 0.0;
     var r = (1 - pk * (1 - pr)) * (1 - bl * (1 - br)) * g;
     var gg = (1 - pk * (1 - pg)) * (1 - bl * (1 - bg)) * g;
     var b = (1 - pk * (1 - pb)) * (1 - bl * (1 - bb)) * g;
     var alpha = a;
 
-    // 재단선은 스티커 밖에만, 블루 85%.
-    final c = cut[i] * (1 - a) * 0.85;
+    // 스티커 밖: 재단선(블루 85%)과, 테두리가 어긋남보다 얇을 때 삐져나온 블루 판.
+    final c = math.max(cut[i] * 0.85, blue[i]) * (1 - a);
     if (c > 0) {
       final total = alpha + c * (1 - alpha);
       r = (r * alpha + br * c * (1 - alpha)) / total;
@@ -449,6 +456,91 @@ void _autoLevels(Float32List lum, Float32List mask) {
   for (var i = 0; i < lum.length; i++) {
     lum[i] = _clamp01((lum[i] - lo) / span);
   }
+}
+
+/// 거리장 [dist]의 등고선(level)을 따라 걸으며 호 길이를 매기고, ±band 띠 안으로 퍼뜨린다.
+/// 닿지 않은 곳은 -1.
+Float32List _arcAlongLevel(Float32List dist, int s, double level, double band) {
+  final n = s * s;
+  final arc = Float32List(n)..fillRange(0, n, -1);
+  bool inside(int i) => dist[i] <= level;
+  final edge = Uint8List(n);
+  for (var y = 0; y < s; y++) {
+    for (var x = 0; x < s; x++) {
+      final i = y * s + x;
+      if (!inside(i)) continue;
+      if (x == 0 ||
+          x == s - 1 ||
+          y == 0 ||
+          y == s - 1 ||
+          !inside(i - 1) ||
+          !inside(i + 1) ||
+          !inside(i - s) ||
+          !inside(i + s)) {
+        edge[i] = 1;
+      }
+    }
+  }
+  // 4-이웃 먼저, 그다음 대각선.
+  const dx = [1, 0, -1, 0, 1, -1, -1, 1];
+  const dy = [0, 1, 0, -1, 1, 1, -1, -1];
+  final queue = Int32List(n);
+  var tail = 0;
+  var fresh = 0.0; // 새 조각의 시작 호 길이
+  for (var start = 0; start < n; start++) {
+    if (edge[start] != 1 || arc[start] >= 0) continue;
+    // 이미 매긴 이웃이 있으면 그 호 길이에서 이어 간다(조각 사이 위상 튐 방지).
+    var len = fresh;
+    final sx = start % s, sy = start ~/ s;
+    for (var k = 0; k < 8; k++) {
+      final x = sx + dx[k], y = sy + dy[k];
+      if (x < 0 || y < 0 || x >= s || y >= s) continue;
+      final j = y * s + x;
+      if (edge[j] == 1 && arc[j] >= 0) {
+        len = arc[j] + (k < 4 ? 1 : math.sqrt2);
+        break;
+      }
+    }
+    var cur = start;
+    while (true) {
+      arc[cur] = len;
+      queue[tail++] = cur;
+      final cx = cur % s, cy = cur ~/ s;
+      var next = -1, step = 0.0;
+      for (var k = 0; k < 8; k++) {
+        final x = cx + dx[k], y = cy + dy[k];
+        if (x < 0 || y < 0 || x >= s || y >= s) continue;
+        final j = y * s + x;
+        if (edge[j] == 1 && arc[j] < 0) {
+          next = j;
+          step = k < 4 ? 1 : math.sqrt2;
+          break;
+        }
+      }
+      if (next < 0) break;
+      len += step;
+      cur = next;
+    }
+    fresh = len + 8;
+  }
+  // 등고선에서 띠 안쪽·바깥쪽으로 가장 가까운 호 길이를 퍼뜨린다(다중 출발 BFS).
+  var head = 0;
+  while (head < tail) {
+    final i = queue[head++];
+    final x = i % s, y = i ~/ s;
+    void visit(int j) {
+      if (arc[j] < 0 && (dist[j] - level).abs() <= band) {
+        arc[j] = arc[i];
+        queue[tail++] = j;
+      }
+    }
+
+    if (x > 0) visit(i - 1);
+    if (x < s - 1) visit(i + 1);
+    if (y > 0) visit(i - s);
+    if (y < s - 1) visit(i + s);
+  }
+  return arc;
 }
 
 /// 3-4 챔퍼 거리 변환(px, 근사 유클리드).
