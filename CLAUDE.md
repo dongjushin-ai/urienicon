@@ -12,6 +12,22 @@
 - `docs/screens/f3-*.png` — 앱 최종 시안 5장(390×844). 위키미디어 사진 변환본이라 공개 레포에서 제외, 로컬에만 있음
 - `docs/screens-source/*.dc.html` — 시안 원본(디자인 캔버스 형식, `/_blob/` 이미지는 캔버스에서만 보임)
 - `assets/` — 키 비주얼 SVG
+- `docs/s1-issues.md` — S1 이슈 원문(GitHub #1~#6) / `docs/h0-measure.md` — H0 측정 방법·결과
+- `docs/decisions/` — 결정 기록(ADR). 0001: 리소는 CPU 먼저, GPU는 실측 400ms 초과 시
+
+## 코드 구조
+- `lib/riso/riso.dart` — 리소 2판 변환 CPU 기준 구현(순수 Dart, Flutter 비의존). 그림체 규칙은 여기 한 곳에만
+- `lib/segmenter.dart` — ML Kit 주체 분할 래퍼(전경 비트맵만, 워밍업, 전경 5%/95% 판정)
+- `lib/imaging.dart` — 디코드/PNG 인코드(EXIF 없음), 내용 기반 시드
+- `lib/screens/` — S1 스파이크 화면, H0 측정 화면 / `lib/h0_stats.dart` — H0 판정 계산
+
+## 개발 명령 (프로젝트 폴더에서)
+- 검사: `dart format lib test tool` → `flutter analyze` → `flutter test`
+- 그림체를 바꿨으면 골든 갱신: `$env:UPDATE_GOLDENS="1"; flutter test test/riso_test.dart; Remove-Item Env:UPDATE_GOLDENS` (PowerShell) 후 `test/goldens/riso_disk.png` 눈으로 확인
+- 폰 없이 변환 확인: `dart run tool/riso_cli.dart <누끼 PNG> <출력 폴더>`
+- 속도: `dart compile exe tool/riso_bench.dart -o riso_bench` → `./riso_bench <누끼 PNG>`
+- CI(GitHub Actions): PR·main 푸시마다 포맷·분석·테스트 + arm64 릴리스 APK 아티팩트(14일 보관). 업로드 키 없으면 디버그 키 서명(내 폰 테스트 전용)
+- 릴리스 서명: `android/key.properties`(커밋 금지, .gitignore 처리됨)가 있으면 업로드 키 사용
 
 ## 일정
 3번째 앱. 2027-04-12 시작 → S1 스파이크(분할 품질) → 6/7~6/20 비공개 테스트(6월 기말과 겹침 주의) → 2027-06-27 출시 목표. 설계서 스프린트 날짜는 이 일정으로 바꾸고, 번들 시즌 팩은 연말 대신 여름 팩.
@@ -20,7 +36,7 @@
 S1 스파이크 목표: ML Kit 분할 품질·속도 검증(사진 30장 중 80% OK, 중급기 1.5초) + 리소 셰이더 프로토타입. 끝 결과물: 사진 1장 → 리소 스티커 PNG 1장.
 
 ## 먼저 확인할 것
-시안 강아지 사진은 위키미디어 사진을 변환한 것이라 출시 전 직접 찍은 사진으로 교체. google_mlkit_subject_segmentation은 Android 전용 beta. 카톡 투명 PNG 유지 여부 미확인(기본 흰 배경 전송).
+시안 강아지 사진은 위키미디어 사진을 변환한 것이라 출시 전 직접 찍은 사진으로 교체. google_mlkit_subject_segmentation은 Android 전용 beta(0.2.1 소스로 옵션·결과 필드 확인함: 전경 비트맵은 네이티브에서 PNG로 넘어옴). 카톡 투명 PNG 유지 여부 미확인(기본 흰 배경 전송, 이슈 #6).
 
 ## 작업 규칙 (이 사용자 고정)
 - 모든 답변은 한국어. 코드·명령어·고유명사만 원문.
