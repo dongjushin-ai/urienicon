@@ -1,6 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:image_picker_android/image_picker_android.dart';
+import 'package:image_picker_platform_interface/image_picker_platform_interface.dart';
+
+import 'screens/h0_screen.dart';
+import 'screens/spike_screen.dart';
 
 void main() {
+  // Android 15 이하도 시스템 Photo Picker 사용(사진 권한 0개). 16+는 항상 Photo Picker.
+  final picker = ImagePickerPlatform.instance;
+  if (picker is ImagePickerAndroid) picker.useAndroidPhotoPicker = true;
   runApp(const UrieniconApp());
 }
 
@@ -33,20 +41,53 @@ class UrieniconApp extends StatelessWidget {
   }
 }
 
-/// S1 스파이크 진입 화면. 사진 1장 → 분할 → 리소 변환 → PNG 저장은 S1 이슈에서 채운다.
+/// S1 스파이크 진입 화면.
 class SpikeHome extends StatelessWidget {
   const SpikeHome({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return const Scaffold(
-      body: Center(
-        child: Text(
-          '우리애콘',
-          style: TextStyle(
-            fontSize: 40,
-            fontWeight: FontWeight.w900,
-            color: Riso.blue,
+    void open(Widget page) =>
+        Navigator.of(context)
+            .push(MaterialPageRoute<void>(builder: (_) => page));
+
+    return Scaffold(
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Spacer(),
+              const Text(
+                '우리애콘',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 40,
+                  fontWeight: FontWeight.w900,
+                  color: Riso.blue,
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text('S1 스파이크', textAlign: TextAlign.center),
+              const Spacer(),
+              FilledButton(
+                onPressed: () => open(const SpikeScreen()),
+                child: const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 14),
+                  child: Text('사진 1장 → 리소 스티커'),
+                ),
+              ),
+              const SizedBox(height: 12),
+              OutlinedButton(
+                onPressed: () => open(const H0Screen()),
+                child: const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 14),
+                  child: Text('H0 분할 측정 (여러 장)'),
+                ),
+              ),
+              const SizedBox(height: 24),
+            ],
           ),
         ),
       ),
