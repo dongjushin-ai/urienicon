@@ -1,6 +1,8 @@
 // 폰 없이 리소 변환을 확인하는 도구.
 //
-//   dart run tool/riso_cli.dart <오린 PNG> <출력 폴더> [seed] [--design]
+//   dart run tool/riso_cli.dart <오린 PNG> <출력 폴더> [seed] [--design] [--plates]
+//
+// --plates: 판별 디버그 이미지(mask.png: 배치된 전경 마스크)도 저장. 품질 평가용.
 //
 // --design: docs/design.md 10장 값(핑크 #FF48B0, 블루 #0078BF, 어긋남 (3,-2))으로 비교용 렌더.
 // 판 역할(둘 다 망점)·0.4° 회전은 반영하지 않는다(확정은 style.md).
@@ -14,9 +16,10 @@ import 'package:urienicon/riso/riso.dart';
 void main(List<String> argv) {
   final args = [...argv];
   final design = args.remove('--design');
+  final plates = args.remove('--plates');
   if (args.length < 2) {
     stderr.writeln(
-      '사용법: dart run tool/riso_cli.dart <오린 PNG> <출력 폴더> [seed] [--design]',
+      '사용법: dart run tool/riso_cli.dart <오린 PNG> <출력 폴더> [seed] [--design] [--plates]',
     );
     exitCode = 64;
     return;
@@ -62,6 +65,19 @@ void main(List<String> argv) {
 
   save('sticker_transparent.png', out.transparent);
   save('sticker_paper.png', out.paper);
+  if (plates) {
+    final m = out.plates.mask;
+    final im = RgbaImage.blank(out.plates.size, out.plates.size);
+    for (var i = 0; i < m.length; i++) {
+      final v = (m[i] * 255).round();
+      im.pixels
+        ..[i * 4] = v
+        ..[i * 4 + 1] = v
+        ..[i * 4 + 2] = v
+        ..[i * 4 + 3] = 255;
+    }
+    save('mask.png', im);
+  }
   stdout.writeln(
     '전경 비율 ${(foregroundRatio(cutout) * 100).toStringAsFixed(1)}%, '
     '변환 ${sw.elapsedMilliseconds}ms(JIT, 기기와 다름) → ${dir.path}',

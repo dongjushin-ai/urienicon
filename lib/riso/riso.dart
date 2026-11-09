@@ -183,8 +183,10 @@ RisoOutput renderRiso(RgbaImage cutout, [RisoParams p = const RisoParams()]) {
   final lum = Float32List(n);
   _place(src, box, scale, ox, oy, s, mask, lum);
 
-  // 2. 대비 자동 보정(전경 안 상하위 2%).
+  // 2. 대비: 전경 안 상하위 2% 늘리기 → 국소 대비 평활화(CLAHE).
+  // 검은 털·흰 털처럼 명도가 한쪽에 몰린 사진도 눈·털결이 살도록(docs/decisions/0002).
   _autoLevels(lum, mask);
+  _localContrast(lum, mask, s);
 
   // 3. 거리장: 전경 바깥 거리(테두리·재단선), 안쪽 거리(윤곽선).
   final distOut = _chamfer(mask, s, inside: false);
@@ -541,6 +543,80 @@ Float32List _arcAlongLevel(Float32List dist, int s, double level, double band) {
     if (y < s - 1) visit(i + s);
   }
   return arc;
+}
+
+/// 대비 제한 적응형 히스토그램 평활화(CLAHE), 전경만.
+/// 캔버스를 [tiles]×[tiles] 칸으로 나눠 칸마다 누적분포로 명도를 다시 매기고,
+/// 칸 경계는 쌍선형으로 섞는다. [clip]은 평균 대비 히스토그램 상한(높을수록 대비↑·노이즈↑).
+/// 값은 반려동물 36장 평가로 정함(docs/decisions/0002).
+void _localContrast(
+  Float32List lum,
+  Float32List mask,
+  int s, {
+  int tiles = 4,
+  double clip = 2.5,
+}) {
+  const bins = 64;
+  final ts = s / tiles;
+  final maps = List.generate(tiles * tiles, (_) => Float32List(bins));
+  for (var ty = 0; ty < tiles; ty++) {
+    for (var tx = 0; tx < tiles; tx++) {
+      final hist = Float64List(bins);
+      var n = 0;
+      final y0 = (ty * ts).floor(), y1 = ((ty + 1) * ts).floor();
+      final x0 = (tx * ts).floor(), x1 = ((tx + 1) * ts).floor();
+      for (var y = y0; y < y1; y++) {
+        for (var x = x0; x < x1; x++) {
+          final i = y * s + x;
+          if (mask[i] < 0.5) continue;
+          hist[math.min(bins - 1, (lum[i] * bins).floor())]++;
+          n++;
+        }
+      }
+      final map = maps[ty * tiles + tx];
+      if (n < 64) {
+        // 전경이 거의 없는 칸: 그대로(항등).
+        for (var b = 0; b < bins; b++) {
+          map[b] = (b + 0.5) / bins;
+        }
+        continue;
+      }
+      // 상한을 넘는 몫은 모든 칸에 고르게 나눈다(대비 과장·노이즈 증폭 억제).
+      final limit = clip * n / bins;
+      var excess = 0.0;
+      for (var b = 0; b < bins; b++) {
+        if (hist[b] > limit) {
+          excess += hist[b] - limit;
+          hist[b] = limit;
+        }
+      }
+      var acc = 0.0;
+      for (var b = 0; b < bins; b++) {
+        acc += hist[b] + excess / bins;
+        map[b] = acc / n;
+      }
+    }
+  }
+  for (var y = 0; y < s; y++) {
+    final fy = ((y + 0.5) / ts - 0.5).clamp(0.0, tiles - 1.0);
+    final ty0 = fy.floor(), ty1 = math.min(ty0 + 1, tiles - 1);
+    final wy = fy - ty0;
+    for (var x = 0; x < s; x++) {
+      final i = y * s + x;
+      if (mask[i] <= 0) continue;
+      final fx = ((x + 0.5) / ts - 0.5).clamp(0.0, tiles - 1.0);
+      final tx0 = fx.floor(), tx1 = math.min(tx0 + 1, tiles - 1);
+      final wx = fx - tx0;
+      final b = math.min(bins - 1, (lum[i] * bins).floor());
+      final top =
+          maps[ty0 * tiles + tx0][b] * (1 - wx) +
+          maps[ty0 * tiles + tx1][b] * wx;
+      final bot =
+          maps[ty1 * tiles + tx0][b] * (1 - wx) +
+          maps[ty1 * tiles + tx1][b] * wx;
+      lum[i] = top * (1 - wy) + bot * wy;
+    }
+  }
 }
 
 /// 3-4 챔퍼 거리 변환(px, 근사 유클리드).

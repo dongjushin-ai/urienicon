@@ -197,6 +197,47 @@ void main() {
     expect(lost / inked, inInclusiveRange(0.02, 0.08));
   });
 
+  test('검은 털: 밝은 눈 하이라이트가 대비를 독점해도 몸이 남보라 덩어리가 되지 않음', () {
+    // 털은 명도 10~60의 부드러운 그라데이션, 눈 하이라이트(240)가 전경의 약 3%.
+    // 전역 대비만 쓰면 상위 2%가 눈이라 털이 늘어나지 않고 그림자 판이 몸을 덮는다.
+    final im = disk(400, 400, shade: 30);
+    for (var i = 0; i < 400 * 400; i++) {
+      if (im.pixels[i * 4 + 3] == 0) continue;
+      final v = 10 + (50 * (i ~/ 400) / 400).round();
+      im.pixels
+        ..[i * 4] = v
+        ..[i * 4 + 1] = v
+        ..[i * 4 + 2] = v;
+    }
+    for (final (ex, ey) in [(160, 170), (240, 170)]) {
+      for (var y = ey - 13; y < ey + 13; y++) {
+        for (var x = ex - 13; x < ex + 13; x++) {
+          final o = (y * 400 + x) * 4;
+          im.pixels
+            ..[o] = 240
+            ..[o + 1] = 240
+            ..[o + 2] = 240;
+        }
+      }
+    }
+    final out = renderRiso(im, const RisoParams(dropout: 0, grain: 0));
+    final m = out.plates.mask, px = out.paper.pixels;
+    var body = 0, dark = 0;
+    for (var i = 0; i < m.length; i++) {
+      if (m[i] < 1) continue;
+      body++;
+      final l =
+          (0.2126 * px[i * 4] +
+              0.7152 * px[i * 4 + 1] +
+              0.0722 * px[i * 4 + 2]) /
+          255;
+      if (l < 0.35) dark++;
+    }
+    final ratio = dark / body;
+    // 이전 방식(전역 대비만) 82%, CLAHE 40%.
+    expect(ratio, lessThan(0.5), reason: '남보라 덩어리 ${(ratio * 100).round()}%');
+  });
+
   test('작은 잡티는 지우고 배치에 영향을 주지 않음', () {
     final clean = renderRiso(disk(400, 400, cx: 200, cy: 200, r: 120));
     final noisy = renderRiso(

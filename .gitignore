@@ -52,3 +52,6 @@ app.*.map.json
 
 # 실기기 확인 스크립트 결과(사진·로그)
 /s1-results/
+
+# 그림체 평가 표본(Oxford-IIIT Pet, 레포에 넣지 않음)
+/tool/eval/data/

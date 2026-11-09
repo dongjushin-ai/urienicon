@@ -13,7 +13,7 @@
 - `docs/screens-source/*.dc.html` — 시안 원본(디자인 캔버스 형식, `/_blob/` 이미지는 캔버스에서만 보임)
 - `assets/` — 키 비주얼 SVG
 - `docs/s1-issues.md` — S1 이슈 원문(GitHub #1~#6) / `docs/h0-measure.md` — H0 측정 방법·결과
-- `docs/decisions/` — 결정 기록(ADR). 0001: 리소는 CPU 먼저, GPU는 실측 400ms 초과 시
+- `docs/decisions/` — 결정 기록(ADR). 0001: 리소는 CPU 먼저, GPU는 실측 400ms 초과 시 / 0002: 명도 보정에 CLAHE(검은 털 덩어리 해결)
 
 ## 코드 구조
 - `lib/riso/riso.dart` — 리소 2판 변환 CPU 기준 구현(순수 Dart, Flutter 비의존). 그림체 규칙은 여기 한 곳에만
@@ -26,6 +26,7 @@
 - 그림체를 바꿨으면 골든 갱신: `$env:UPDATE_GOLDENS="1"; flutter test test/riso_test.dart; Remove-Item Env:UPDATE_GOLDENS` (PowerShell) 후 `test/goldens/riso_disk.png` 눈으로 확인
 - 폰 없이 변환 확인: `dart run tool/riso_cli.dart <누끼 PNG> <출력 폴더>`
 - 속도: `dart compile exe tool/riso_bench.dart -o riso_bench` → `./riso_bench <누끼 PNG>`
+- 그림체 품질 평가(파라미터를 바꿀 때마다): `tool/eval/fetch_pets.py`로 털색별 36장 → riso_cli `--plates` → `tool/eval/metrics.py`. 기준값은 ADR 0002 표
 - CI(GitHub Actions): PR·main 푸시마다 포맷·분석·테스트 + arm64 릴리스 APK 아티팩트(14일 보관). 업로드 키 없으면 디버그 키 서명(내 폰 테스트 전용)
 - 릴리스 서명: `android/key.properties`(커밋 금지, .gitignore 처리됨)가 있으면 업로드 키 사용
 
