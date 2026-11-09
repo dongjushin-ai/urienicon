@@ -49,3 +49,9 @@ app.*.map.json
 
 # 시안 PNG: 위키미디어 사진을 변환한 이미지라 공개 레포에서 제외(로컬에만 보관)
 /docs/screens/
+
+# 실기기 확인 스크립트 결과(사진·로그)
+/s1-results/
+
+# 그림체 평가 표본(Oxford-IIIT Pet, 레포에 넣지 않음)
+/tool/eval/data/
